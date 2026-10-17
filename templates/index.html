@@ -1,0 +1,218 @@
+<!doctype html>
+<html lang="vi">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#812b34" />
+    <link rel="manifest" href="/static/manifest.json" />
+
+    <link rel="icon" type="image/png" href="/static/icon-192.png" />
+
+    <link rel="apple-touch-icon" href="/static/icon-192.png" />
+
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-title" content="Góc đọc" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+    <title>Góc đọc</title>
+
+    <link
+      rel="stylesheet"
+      href="{{ url_for('static', filename='style.css') }}"
+    />
+  </head>
+
+  <body>
+    <main>
+      <header>
+        <p class="eyebrow">GÓC ĐỌC CÁ NHÂN</p>
+        <h1>Một chút thời gian<br />cho điều ý nghĩa.</h1>
+        <p class="subtitle">Các bài mới từ dongten.net</p>
+      </header>
+
+      <section class="toolbar">
+        <div>
+          <h2>Bài mới</h2>
+          <p id="update-time">Chưa có dữ liệu</p>
+        </div>
+
+        <button type="button" id="refresh-button">Làm mới ↻</button>
+      </section>
+
+      <p id="status" role="status" aria-live="polite"></p>
+
+      <section class="articles" id="articles" aria-label="Danh sách bài viết">
+        <p class="empty">Đang chuẩn bị danh sách…</p>
+      </section>
+
+      <footer>
+        Nguồn: <a href="https://dongten.net/">dongten.net</a>
+        <br />
+        Trang đọc cá nhân, không phải website chính thức của Dòng Tên.
+      </footer>
+    </main>
+
+    <script>
+      const danhSach = document.querySelector("#articles");
+      const thoiGian = document.querySelector("#update-time");
+      const trangThai = document.querySelector("#status");
+      const nutLamMoi = document.querySelector("#refresh-button");
+
+      const KHO_LUU = "goc-doc-tin-v1";
+      let dangTai = false;
+      let daCoTin = false;
+
+      function hienThi(data) {
+        if (!Array.isArray(data.bai_viet)) {
+          return;
+        }
+
+        const fragment = document.createDocumentFragment();
+        let soBai = 0;
+
+        for (const bai of data.bai_viet) {
+          if (typeof bai.tieu_de !== "string") continue;
+
+          // Chỉ mở liên kết HTTPS thuộc dongten.net
+          let url;
+
+          try {
+            url = new URL(bai.link);
+
+            if (url.protocol !== "https:" || url.hostname !== "dongten.net") {
+              continue;
+            }
+          } catch {
+            continue;
+          }
+
+          soBai++;
+
+          const link = document.createElement("a");
+          link.className = "article";
+          link.href = url.href;
+
+          const so = document.createElement("span");
+          so.className = "number";
+          so.textContent = String(soBai).padStart(2, "0");
+
+          const noiDung = document.createElement("div");
+
+          const tieuDe = document.createElement("h3");
+          tieuDe.textContent = bai.tieu_de;
+
+          const chuDoc = document.createElement("span");
+          chuDoc.className = "read-link";
+          chuDoc.textContent = "Đọc trên dongten.net ↗";
+
+          noiDung.append(tieuDe, chuDoc);
+          link.append(so, noiDung);
+          fragment.append(link);
+        }
+
+        // Không xóa danh sách cũ nếu dữ liệu mới không hợp lệ
+        if (soBai === 0) return;
+
+        danhSach.replaceChildren(fragment);
+        daCoTin = true;
+
+        const ngay = new Date(data.cap_nhat_luc);
+
+        thoiGian.textContent =
+          data.cap_nhat_luc && !Number.isNaN(ngay.getTime())
+            ? "Đã lấy tin: " +
+              ngay.toLocaleString("vi-VN", {
+                timeZone: "Asia/Ho_Chi_Minh",
+                hour: "2-digit",
+                minute: "2-digit",
+                day: "2-digit",
+                month: "2-digit",
+              })
+            : "Danh sách đã lưu";
+      }
+
+      function docTinDaLuu() {
+        try {
+          const noiDung = localStorage.getItem(KHO_LUU);
+
+          if (noiDung) {
+            hienThi(JSON.parse(noiDung));
+          }
+        } catch {
+          // Nếu không đọc được bộ nhớ, vẫn tải tin qua mạng
+        }
+      }
+
+      function luuTin(data) {
+        try {
+          localStorage.setItem(KHO_LUU, JSON.stringify(data));
+        } catch {
+          // Bộ nhớ không khả dụng thì vẫn xem được tin
+        }
+      }
+
+      async function taiTin() {
+        if (dangTai) return;
+
+        dangTai = true;
+        nutLamMoi.disabled = true;
+        nutLamMoi.textContent = "Đang tải…";
+
+        trangThai.textContent = daCoTin
+          ? "Đang kiểm tra tin mới. Bạn vẫn có thể đọc các bài bên dưới."
+          : "Đang lấy tin lần đầu, bạn chờ một chút nhé…";
+
+        const controller = new AbortController();
+        const henGio = setTimeout(() => controller.abort(), 150000);
+
+        try {
+          const response = await fetch("/api/tin", {
+            cache: "no-store",
+            signal: controller.signal,
+          });
+
+          const data = await response.json();
+
+          // Kể cả khi nguồn lỗi, server có thể còn danh sách cũ
+          if (Array.isArray(data.bai_viet) && data.bai_viet.length > 0) {
+            hienThi(data);
+            luuTin(data);
+          }
+
+          if (!response.ok || data.loi) {
+            throw new Error("Không cập nhật được");
+          }
+
+          trangThai.textContent =
+            "Đã cập nhật danh sách. Nguồn được kiểm tra tối đa mỗi 5 phút.";
+        } catch {
+          trangThai.textContent = daCoTin
+            ? "Chưa cập nhật được. Đang hiển thị danh sách đã lưu."
+            : "Chưa tải được tin. Bạn bấm Làm mới để thử lại nhé.";
+
+          if (!daCoTin) {
+            danhSach.innerHTML =
+              '<p class="empty">Chưa có bài viết để hiển thị.</p>';
+          }
+        } finally {
+          clearTimeout(henGio);
+          dangTai = false;
+          nutLamMoi.disabled = false;
+          nutLamMoi.textContent = "Làm mới ↻";
+        }
+      }
+
+      nutLamMoi.addEventListener("click", taiTin);
+
+      // Hiện tin đã lưu trước, sau đó mới tải qua mạng
+      docTinDaLuu();
+      taiTin();
+      if ("serviceWorker" in navigator && window.isSecureContext) {
+        window.addEventListener("load", () => {
+          navigator.serviceWorker.register("/sw.js").catch((error) => {
+            console.log("Chưa đăng ký được service worker:", error);
+          });
+        });
+      }
+    </script>
+  </body>
+</html>
